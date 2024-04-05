@@ -2,6 +2,7 @@ import os
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin
+from concurrent.futures import ThreadPoolExecutor
 
 def download_image(url, folder_path, index):
     try:
@@ -16,9 +17,11 @@ def download_image(url, folder_path, index):
     except Exception as e:
         print(f"Ошибка при скачивании изображения {url}: {str(e)}")
 
-
 def scrape_images(base_url, total_pages, folder_path):
-    index = 1
+    if not os.path.exists(folder_path):
+        os.makedirs(folder_path)
+
+    image_urls = []
     for page_number in range(1, total_pages + 1):
         page_url = f"{base_url}?page={page_number}"
         page_response = requests.get(page_url)
@@ -30,19 +33,24 @@ def scrape_images(base_url, total_pages, folder_path):
                 image_url = card.find('img').get('data-src', None)
                 if image_url:
                     full_image_url = urljoin(base_url, image_url)
-                    download_image(full_image_url, folder_path, index)
-                    index += 1
+                    image_urls.append(full_image_url)
                 else:
                     print("data-src битое")
         else:
             print(f"Ошибка при получении страницы {page_url}. Статус код: {page_response.status_code}")
 
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        for index, url in enumerate(image_urls, start=1):
+            executor.submit(download_image, url, folder_path, index)
+
 if __name__ == "__main__":
-    base_url = "https://www.chitai-gorod.ru/catalog/artists-110621"
-    total_pages = 30
-    folder_path = "images"
+    base_urls = ["https://www.chitai-gorod.ru/catalog/artists/kisti-110622", 
+                 "https://www.chitai-gorod.ru/catalog/artists/kraski-110628",
+                 "https://www.chitai-gorod.ru/catalog/artists/bumaga-i-karton-dlya-hudozhestvennyh-rabot-110646"]
+    total_pages = 10
+    folder_paths = ["images/brushes",
+                   "images/paints",
+                   "images/paper"]
 
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path)
-
-    scrape_images(base_url, total_pages, folder_path)
+    for base_url, folder_path in zip(base_urls, folder_paths):
+        scrape_images(base_url, total_pages, folder_path)

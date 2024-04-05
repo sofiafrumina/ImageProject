@@ -1,65 +1,76 @@
-import cv2
-import numpy as np
 import os
+import cv2
+from colormath.color_diff import delta_e_cie2000
+from colormath.color_objects import LabColor
+from colormath.color_conversions import convert_color
+import numpy as np
 
-def are_complementary_colors(hue1, hue2):
-    # Определяем интервалы комплиментарных оттенков
-    complementary_ranges = [(0, 60), (120, 180)]
-    
-    # Проверяем, находятся ли оттенки в разных интервалах
-    for range_start, range_end in complementary_ranges:
-        if (hue1 >= range_start and hue1 <= range_end) and (hue2 >= range_start and hue2 <= range_end):
-            return True
-    return False
 
-def find_dominant_hue(image):
-    # Преобразование изображения в оттенки серого
-    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    
-    # Вычисление среднего значения оттенков серого
-    mean_gray = np.mean(gray_image)
-    
-    # Возвращаем среднее значение, округленное до ближайшего целого
-    return int(mean_gray)
+def patch_asscalar(a):
+    return a.item()
 
-def find_complementary_images(target_image_path, directory_path, num_complementary=5):
-    # Загрузка изображения, для которого мы ищем комплиментарные
-    target_image = cv2.imread(target_image_path, cv2.IMREAD_UNCHANGED)
-    target_alpha_channel = target_image[:, :, 3]
-    target_image = cv2.cvtColor(target_image, cv2.COLOR_BGRA2BGR)  # Преобразуем в RGB для определения преобладающего оттенка
-    target_dominant_hue = find_dominant_hue(target_image)
 
-    # Создаем список для хранения полных путей к комплиментарным изображениям
-    complementary_images_paths = []
+setattr(np, "asscalar", patch_asscalar)
 
-    # Перебор всех изображений в директории
-    for filename in os.listdir(directory_path):
-        if filename.endswith(".png") and  filename != os.path.basename(target_image_path):
-            image_path = os.path.join(directory_path, filename)
-            image = cv2.imread(image_path, cv2.IMREAD_UNCHANGED)
-            if len(image.shape) == 3 and image.shape[2] == 4:
-                image = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)  # Преобразуем в RGB для определения преобладающего оттенка
-            dominant_hue = find_dominant_hue(image)
 
-            # Проверяем, являются ли преобладающие оттенки комплиментарными
-            if are_complementary_colors(target_dominant_hue, dominant_hue):
-                complementary_images_paths.append((image_path, dominant_hue))
-    
-    # Сортируем список комплиментарных изображений по преобладающему оттенку
-    complementary_images_paths.sort(key=lambda x: abs(x[1] - target_dominant_hue))
+def compute_average_color(image):
+    # Вычисляем средний цвет в прямоугольнике
+    average_color = np.mean(image, axis=(0, 1))
+    return LabColor(average_color[0], average_color[1], average_color[2])
 
-    # Выводим названия комплиментарных изображений (максимум пять)
-    print("Complementary images found:")
-    for image_path, _ in complementary_images_paths[:num_complementary]:
-        print(image_path)
 
-    # Возвращаем список комплиментарных изображений
-    return [image_path for image_path, _ in complementary_images_paths[:num_complementary]]
+# Загрузка изображений и вычисление их средних цветов
+image_dir = 'images/newPaints'
+image_files = os.listdir(image_dir)
+image_paths = [os.path.join(image_dir, f) for f in image_files]
+images = []
+average_colors = []
+for image_path in image_paths:
+    image = cv2.imread(image_path)
+    images.append(image)
+    average_color = compute_average_color(image)
+    average_colors.append(average_color)
 
-# Путь к изображению, для которого мы ищем комплиментарные
-target_image_path = 'images/newPaints/201.png'
-# Директория, в которой мы ищем комплиментарные изображения
-directory_path = 'images/newPaints'
 
-# Находим комплиментарные изображения
-complementary_images = find_complementary_images(target_image_path, directory_path)
+# Функция для поиска наиболее похожих изображений по цвету
+def search_similar_images(query_color, average_colors):
+    similarities = []
+    for color in average_colors:
+        similarity = delta_e_cie2000(query_color, color)
+        similarities.append(similarity)
+    return similarities
+
+
+def find_photo_for_color(r, g, b):
+    rgb = np.array([[[r, g, b]]], dtype=np.uint8)
+    hsv_color = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)[0][0]
+
+    # Вычисляем комплементарный оттенок
+    complementary_hue = (hsv_color[0] + 180) % 360
+
+    # Конвертируем комплементарный оттенок обратно в BGR
+    complementary_rgb_color = np.array([[[complementary_hue, hsv_color[1], hsv_color[2]]]], dtype=np.uint8)
+    complementary_rgb_color = cv2.cvtColor(complementary_rgb_color, cv2.COLOR_HSV2RGB)[0][0]
+
+    # Конвертируем RGB в Lab
+    complementary_lab_color = convert_color(LabColor(complementary_rgb_color[0], complementary_rgb_color[1], complementary_rgb_color[2]), LabColor)
+
+    # Поиск похожих изображений
+    similarities = search_similar_images(complementary_lab_color, average_colors)
+
+    # Находим наиболее похожие изображения
+    num_similar_images = 5
+    similar_image_indices = np.argsort(similarities)[:num_similar_images]
+
+    # Создаем каталог для результатов, если его еще нет
+    output_directory = 'images/output_complementary_colour'
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    # Сохраняем найденные изображения
+    for idx in similar_image_indices:
+        image_filename = os.path.join(output_directory, f'similar_image_{idx}.png')
+        cv2.imwrite(image_filename, images[idx])
+
+
+find_photo_for_color(255, 0, 255)
